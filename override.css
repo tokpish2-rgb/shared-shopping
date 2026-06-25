@@ -124,11 +124,20 @@
 }
 
 .top-icon[aria-label="Скопировать ссылку приглашения"]:has(svg)::before {
-  content: "↪";
+  content: "👤";
 }
 
 .top-icon[aria-label="Добавить участников"]:has(svg)::before {
-  content: "↪";
+  content: "👤";
+}
+
+.top-icon[data-action="copy-share"] {
+  font-size: 0;
+}
+
+.top-icon[data-action="copy-share"]::before {
+  content: "👤";
+  font-size: 25px;
 }
 
 .top-icon[aria-label="Корзина"]:has(svg)::before {
@@ -179,11 +188,12 @@
   display: grid;
   place-items: center;
   border-radius: 999px;
-  border: 3px solid var(--ink);
-  background: #fff;
+  border: 0;
+  background: transparent;
   color: var(--ink);
   font-size: 26px;
   line-height: 1;
+  box-shadow: none;
 }
 
 .common-pool,
