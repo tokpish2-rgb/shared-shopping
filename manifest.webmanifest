@@ -1,0 +1,9 @@
+{
+  "name": "Общая закупка",
+  "short_name": "Закупка",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f6f3ec",
+  "theme_color": "#101820",
+  "icons": []
+}
