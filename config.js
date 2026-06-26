@@ -1,0 +1,1 @@
+window.SHOPSYNC_FIREBASE_CONFIG = null;
