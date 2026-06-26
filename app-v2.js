@@ -2,8 +2,9 @@ const appRoot = document.querySelector('#app');
 const firebaseConfig = window.SHOPSYNC_FIREBASE_CONFIG;
 const storageKey = 'shopsync:v2';
 const roleKey = 'shopsync:roles:v2';
+const adminStateKey = 'shopsync:last-admin:v2';
 const dragStartMs = 80;
-const dragAllMs = 500;
+const dragAllMs = 600;
 const participantIcons = ['🦁', '🐺', '🦊', '🦍', '🐊', '🦅', '🐵', '🐢', '🦄', '🐱', '🐰', '🐨', '🦔', '🐿️', '🐞'];
 const icons = {
   plus: 'M12 5v14M5 12h14',
@@ -28,6 +29,8 @@ let unsubscribe = null;
 let selectedParticipantId = null;
 let undoAction = null;
 let undoTimer = null;
+let copyNotice = '';
+let copyNoticeTimer = null;
 let dragState = null;
 const params = new URLSearchParams(location.search);
 const sharedListId = params.get('list');
@@ -98,6 +101,11 @@ function makeJoinStub(listId) {
 
 function loadLocal() {
   try {
+    const hasListInUrl = new URLSearchParams(location.search).has('list');
+    if (!hasListInUrl) {
+      const adminRaw = localStorage.getItem(adminStateKey);
+      if (adminRaw) return normalizeState(JSON.parse(adminRaw));
+    }
     const raw = localStorage.getItem(storageKey);
     return raw ? normalizeState(JSON.parse(raw)) : null;
   } catch {
@@ -106,7 +114,9 @@ function loadLocal() {
 }
 
 function saveLocal() {
-  if (state) localStorage.setItem(storageKey, JSON.stringify(state));
+  if (!state) return;
+  localStorage.setItem(storageKey, JSON.stringify(state));
+  if (isAdmin()) localStorage.setItem(adminStateKey, JSON.stringify(state));
 }
 
 function loadRoles() {
@@ -257,6 +267,7 @@ function shareUrl() {
 
 async function copyShareLink() {
   await navigator.clipboard?.writeText(shareUrl());
+  showCopyNotice();
 }
 
 function plainListText() {
@@ -276,6 +287,16 @@ function plainListText() {
 
 async function copyPlainList() {
   await navigator.clipboard?.writeText(plainListText());
+  showCopyNotice();
+}
+
+function showCopyNotice() {
+  copyNotice = 'Скопировано';
+  clearTimeout(copyNoticeTimer);
+  copyNoticeTimer = setTimeout(() => {
+    copyNotice = '';
+    render();
+  }, 1400);
 }
 
 function syncLabel() {
@@ -339,7 +360,7 @@ function renderJoin() {
 function renderApp() {
   const [dotClass, label] = syncLabel();
   const adminTools = isAdmin() ? `<button class='top-icon' data-action='copy-share' type='button' aria-label='Добавить участников'>👤</button><button class='top-icon trash-drop' data-drop-trash='true' type='button' aria-label='Удалить'>✖️</button>` : '';
-  return `<header class='app-header'><div class='topline'><div class='title-block'><p class='kicker'>${isAdmin() ? 'Админ' : 'Участник'} · ${escapeHtml(roleForList().name || '')}</p><h1>${escapeHtml(state.title)}</h1></div><div class='top-actions'><button class='top-icon' data-action='copy-list' type='button' aria-label='Копировать список'>📄</button>${adminTools}</div></div><div class='sync-note'><span class='dot ${dotClass}'></span>${label}</div></header>${renderDistribute()}${modal ? renderModal() : ''}${renderUndoToast()}`;
+  return `<header class='app-header'><div class='topline'><div class='title-block'><p class='kicker'>${isAdmin() ? 'Админ' : 'Участник'} · ${escapeHtml(roleForList().name || '')}</p><h1>${escapeHtml(state.title)}</h1></div><div class='top-actions'><button class='top-icon' data-action='copy-list' type='button' aria-label='Копировать список'>📄</button>${adminTools}</div></div><div class='sync-note'><span class='dot ${dotClass}'></span>${label}</div></header>${renderDistribute()}${modal ? renderModal() : ''}${renderUndoToast()}${renderCopyNotice()}`;
 }
 
 function renderDistribute() {
@@ -363,6 +384,10 @@ function renderPersonDropCard(person) {
 
 function renderUndoToast() {
   return undoAction ? `<div class='undo-toast'><span>${escapeHtml(undoAction.message)}</span><button data-action='undo-delete' type='button'>Отменить</button></div>` : '';
+}
+
+function renderCopyNotice() {
+  return copyNotice ? `<div class='copy-toast'>${escapeHtml(copyNotice)}</div>` : '';
 }
 
 function renderInviteCard() {
