@@ -284,3 +284,18 @@
   color: #8ee0ad;
   font-weight: 800;
 }
+
+.copy-toast {
+  position: fixed;
+  left: 50%;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  z-index: 31;
+  transform: translateX(-50%);
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: #101820;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  box-shadow: 0 12px 32px rgba(16, 24, 32, 0.24);
+}
