@@ -2,8 +2,8 @@ const appRoot = document.querySelector('#app');
 const firebaseConfig = window.SHOPSYNC_FIREBASE_CONFIG;
 const storageKey = 'shopsync:v2';
 const roleKey = 'shopsync:roles:v2';
-const dragStartMs = 420;
-const dragAllMs = 2400;
+const dragStartMs = 80;
+const dragAllMs = 500;
 const participantIcons = ['🦁', '🐺', '🦊', '🦍', '🐊', '🦅', '🐵', '🐢', '🦄', '🐱', '🐰', '🐨', '🦔', '🐿️', '🐞'];
 const icons = {
   plus: 'M12 5v14M5 12h14',
@@ -45,6 +45,7 @@ async function boot() {
         firebaseUid = user?.uid || null;
         syncReady = Boolean(firebaseUid);
         if (sharedListId && firebaseUid && (!state || state.id !== sharedListId)) attachRemote(sharedListId);
+        recognizeDeviceRole();
         render();
       });
       await firebaseApi.signInAnonymously(auth);
@@ -73,6 +74,7 @@ function attachRemote(listId) {
   unsubscribe = firebaseApi.onValue(firebaseApi.ref(db, `lists/${listId}`), (snapshot) => {
     const remote = snapshot.val();
     state = remote ? normalizeState(remote) : makeJoinStub(listId);
+    recognizeDeviceRole();
     saveLocal();
     render();
   });
@@ -126,6 +128,23 @@ function roleForList() {
 function setRole(patch) {
   roles[state.id] = { ...roleForList(), ...patch };
   saveRoles();
+}
+
+function participantForUid(uid) {
+  if (!uid) return null;
+  return participantsArray().find((person) => person.uid === uid) || null;
+}
+
+function recognizeDeviceRole() {
+  if (!state?.id || !firebaseUid) return;
+  const patch = {};
+  if (state.adminUid === firebaseUid) patch.adminLocal = false;
+  const participant = participantForUid(firebaseUid);
+  if (participant) {
+    patch.participantId = participant.id;
+    patch.name = participant.name;
+  }
+  if (Object.keys(patch).length) setRole(patch);
 }
 
 function isAdmin() {
@@ -319,14 +338,14 @@ function renderJoin() {
 
 function renderApp() {
   const [dotClass, label] = syncLabel();
-  const adminTools = isAdmin() ? `<button class='top-icon' data-action='copy-share' type='button' aria-label='Скопировать ссылку приглашения'>${icon('share')}</button><button class='top-icon trash-drop' data-drop-trash='true' type='button' aria-label='Корзина'>${icon('trash')}</button>` : '';
-  return `<header class='app-header'><div class='topline'><div class='title-block'><p class='kicker'>${isAdmin() ? 'Админ' : 'Участник'} · ${escapeHtml(roleForList().name || '')}</p><h1>${escapeHtml(state.title)}</h1></div><div class='top-actions'><button class='top-icon' data-action='copy-list' type='button' aria-label='Скопировать список'>${icon('copy')}</button>${adminTools}</div></div><div class='sync-note'><span class='dot ${dotClass}'></span>${label}</div></header>${renderDistribute()}${modal ? renderModal() : ''}${renderUndoToast()}`;
+  const adminTools = isAdmin() ? `<button class='top-icon' data-action='copy-share' type='button' aria-label='Добавить участников'>👤</button><button class='top-icon trash-drop' data-drop-trash='true' type='button' aria-label='Удалить'>✖️</button>` : '';
+  return `<header class='app-header'><div class='topline'><div class='title-block'><p class='kicker'>${isAdmin() ? 'Админ' : 'Участник'} · ${escapeHtml(roleForList().name || '')}</p><h1>${escapeHtml(state.title)}</h1></div><div class='top-actions'><button class='top-icon' data-action='copy-list' type='button' aria-label='Копировать список'>📄</button>${adminTools}</div></div><div class='sync-note'><span class='dot ${dotClass}'></span>${label}</div></header>${renderDistribute()}${modal ? renderModal() : ''}${renderUndoToast()}`;
 }
 
 function renderDistribute() {
   const people = visibleParticipants();
   const items = commonItems();
-  return `<section class='distribute-screen'><div class='common-pool'><div class='pool-head'><h3>Общий список</h3><button class='round-add' data-action='open-item' type='button' aria-label='Добавить покупку'>${icon('plus')}</button></div><div class='pool-items' data-drop-common='true'>${items.length ? items.map(renderPoolItem).join('') : `<span class='chip done'>Все разобрано</span>`}</div></div>${renderParticipantStrip(people)}<div class='people-board'>${people.map(renderPersonDropCard).join('')}</div></section>`;
+  return `<section class='distribute-screen'><div class='common-pool'><div class='pool-head'><h3>Общий список</h3><button class='round-add' data-action='open-item' type='button' aria-label='Добавить покупку'>➕</button></div><div class='pool-items' data-drop-common='true'>${items.length ? items.map(renderPoolItem).join('') : `<span class='chip done'>Все разобрано</span>`}</div></div>${renderParticipantStrip(people)}<div class='people-board'>${people.map(renderPersonDropCard).join('')}</div></section>`;
 }
 
 function renderParticipantStrip(people) {
@@ -625,7 +644,8 @@ async function handleClick(event) {
 async function createList(data) {
   const listId = uid('list');
   const personId = uid('person');
-  state = normalizeState({ id: listId, title: data.title.trim(), adminUid: firebaseUid || `local_${uid('admin')}`, createdAt: Date.now(), participants: { [personId]: { id: personId, name: data.name.trim(), icon: randomParticipantIcon(), createdAt: Date.now() } }, items: {} });
+  const deviceUid = firebaseUid || `local_${uid('device')}`;
+  state = normalizeState({ id: listId, title: data.title.trim(), adminUid: deviceUid, createdAt: Date.now(), participants: { [personId]: { id: personId, uid: deviceUid, name: data.name.trim(), icon: randomParticipantIcon(), createdAt: Date.now() } }, items: {} });
   setRole({ participantId: personId, name: data.name.trim(), adminLocal: !firebaseUid });
   saveLocal();
   if (db && firebaseUid) {
@@ -637,8 +657,15 @@ async function createList(data) {
 }
 
 async function joinList(name) {
+  const existing = participantForUid(firebaseUid);
+  if (existing) {
+    setRole({ participantId: existing.id, name: existing.name, adminLocal: false });
+    modal = null;
+    render();
+    return;
+  }
   const personId = uid('person');
-  const person = { id: personId, name: name.trim(), icon: randomParticipantIcon(), createdAt: Date.now() };
+  const person = { id: personId, uid: firebaseUid || `local_${uid('device')}`, name: name.trim(), icon: randomParticipantIcon(), createdAt: Date.now() };
   setRole({ participantId: personId, name: person.name, adminLocal: false });
   await updateRemote(`participants/${personId}`, person);
   modal = null;
@@ -647,7 +674,7 @@ async function joinList(name) {
 async function addParticipant(name) {
   const personId = uid('person');
   modal = null;
-  await updateRemote(`participants/${personId}`, { id: personId, name: name.trim(), icon: randomParticipantIcon(), createdAt: Date.now() });
+  await updateRemote(`participants/${personId}`, { id: personId, uid: null, name: name.trim(), icon: randomParticipantIcon(), createdAt: Date.now() });
 }
 
 async function saveItem(data) {
