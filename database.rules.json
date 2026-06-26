@@ -1,0 +1,13 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "lists": {
+      "$listId": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        ".validate": "!newData.exists() || newData.child('id').val() === $listId"
+      }
+    }
+  }
+}

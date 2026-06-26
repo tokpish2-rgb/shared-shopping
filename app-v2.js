@@ -5,6 +5,7 @@ const roleKey = 'shopsync:roles:v2';
 const adminStateKey = 'shopsync:last-admin:v2';
 const dragStartMs = 80;
 const dragAllMs = 600;
+const listIdleMs = 30 * 24 * 60 * 60 * 1000;
 const participantIcons = ['🦁', '🐺', '🦊', '🦍', '🐊', '🦅', '🐵', '🐢', '🦄', '🐱', '🐰', '🐨', '🦔', '🐿️', '🐞'];
 const icons = {
   plus: 'M12 5v14M5 12h14',
@@ -76,7 +77,12 @@ function attachRemote(listId) {
   if (unsubscribe) unsubscribe();
   unsubscribe = firebaseApi.onValue(firebaseApi.ref(db, `lists/${listId}`), (snapshot) => {
     const remote = snapshot.val();
-    state = remote ? normalizeState(remote) : makeJoinStub(listId);
+    if (remote && isExpiredList(remote)) {
+      firebaseApi.remove(firebaseApi.ref(db, `lists/${listId}`));
+      state = makeExpiredStub(listId);
+    } else {
+      state = remote ? normalizeState(remote) : makeMissingStub(listId);
+    }
     recognizeDeviceRole();
     saveLocal();
     render();
@@ -84,6 +90,7 @@ function attachRemote(listId) {
 }
 
 function normalizeState(next) {
+  const updatedAt = Number(next.updatedAt || next.createdAt || Date.now());
   return {
     id: next.id,
     title: next.title || 'Общая закупка',
@@ -91,12 +98,31 @@ function normalizeState(next) {
     createdAt: next.createdAt || Date.now(),
     participants: next.participants || {},
     items: next.items || {},
-    updatedAt: next.updatedAt || Date.now()
+    updatedAt,
+    expiresAt: Number(next.expiresAt || updatedAt + listIdleMs)
   };
 }
 
 function makeJoinStub(listId) {
   return { id: listId, title: 'Список по ссылке', adminUid: null, participants: {}, items: {}, missingRemote: true };
+}
+
+function makeMissingStub(listId) {
+  return { id: listId, title: 'Список не найден', adminUid: null, participants: {}, items: {}, missingRemote: true };
+}
+
+function makeExpiredStub(listId) {
+  return { id: listId, title: 'Список устарел', adminUid: null, participants: {}, items: {}, expired: true, missingRemote: true };
+}
+
+function isExpiredList(next) {
+  const updatedAt = Number(next?.updatedAt || next?.createdAt || 0);
+  return Boolean(updatedAt && Date.now() - updatedAt > listIdleMs);
+}
+
+function touchState() {
+  state.updatedAt = Date.now();
+  state.expiresAt = state.updatedAt + listIdleMs;
 }
 
 function loadLocal() {
@@ -310,12 +336,12 @@ async function updateRemote(path, value) {
   let cursor = state;
   for (let i = 0; i < parts.length - 1; i += 1) cursor = cursor[parts[i]];
   cursor[parts.at(-1)] = value;
-  state.updatedAt = Date.now();
+  touchState();
   saveLocal();
   render();
   if (db && !state.missingRemote) {
     await firebaseApi.set(firebaseApi.ref(db, `lists/${state.id}/${path}`), value);
-    await firebaseApi.update(firebaseApi.ref(db, `lists/${state.id}`), { updatedAt: firebaseApi.serverTimestamp() });
+    await firebaseApi.update(firebaseApi.ref(db, `lists/${state.id}`), { updatedAt: firebaseApi.serverTimestamp(), expiresAt: Date.now() + listIdleMs });
   }
 }
 
@@ -324,26 +350,27 @@ async function removeRemote(path) {
   let cursor = state;
   for (let i = 0; i < parts.length - 1; i += 1) cursor = cursor[parts[i]];
   delete cursor[parts.at(-1)];
-  state.updatedAt = Date.now();
+  touchState();
   saveLocal();
   render();
   if (db && !state.missingRemote) {
     await firebaseApi.remove(firebaseApi.ref(db, `lists/${state.id}/${path}`));
-    await firebaseApi.update(firebaseApi.ref(db, `lists/${state.id}`), { updatedAt: firebaseApi.serverTimestamp() });
+    await firebaseApi.update(firebaseApi.ref(db, `lists/${state.id}`), { updatedAt: firebaseApi.serverTimestamp(), expiresAt: Date.now() + listIdleMs });
   }
 }
 
 async function persistState() {
-  state.updatedAt = Date.now();
+  touchState();
   saveLocal();
   render();
   if (db && !state.missingRemote) {
-    await firebaseApi.set(firebaseApi.ref(db, `lists/${state.id}`), { ...state, updatedAt: firebaseApi.serverTimestamp() });
+    await firebaseApi.set(firebaseApi.ref(db, `lists/${state.id}`), { ...state, updatedAt: firebaseApi.serverTimestamp(), expiresAt: Date.now() + listIdleMs });
   }
 }
 
 function render() {
   if (!state) appRoot.innerHTML = renderIntro();
+  else if (state.expired || state.missingRemote) appRoot.innerHTML = renderUnavailableList();
   else if (!currentParticipantId() && !isAdmin()) appRoot.innerHTML = renderJoin();
   else appRoot.innerHTML = renderApp();
   bindEvents();
@@ -353,6 +380,12 @@ function renderIntro() {
   return `<section class='intro'><div><p class='kicker'>Совместные покупки</p><h1>Разберите общую корзину между людьми</h1></div><p class='intro-copy'>Админ создает список, отправляет ссылку или QR-код, участники добавляют покупки и берут себе нужное количество.</p><form class='panel stack' data-action='create-list'><label class='field'><span>Название</span><input class='input' name='title' required value='Пикник в субботу' /></label><label class='field'><span>Ваше имя</span><input class='input' name='name' required placeholder='Например, Антон' /></label><button class='button' type='submit'>${icon('cart')}Создать список</button></form></section>`;
 }
 
+function renderUnavailableList() {
+  const title = state.expired ? 'Этот список удален' : 'Список не найден';
+  const copy = state.expired ? 'Если в список не заходили больше 30 дней, он считается устаревшим.' : 'Возможно, ссылка неверная или список еще не создан в общей базе.';
+  return `<section class='intro'><div><p class='kicker'>Совместные покупки</p><h1>${title}</h1></div><p class='intro-copy'>${copy}</p><form class='panel stack' data-action='create-list'><label class='field'><span>Название нового списка</span><input class='input' name='title' required value='Новая закупка' /></label><label class='field'><span>Ваше имя</span><input class='input' name='name' required placeholder='Например, Антон' /></label><button class='button' type='submit'>➕ Создать новый список</button></form></section>`;
+}
+
 function renderJoin() {
   return `<section class='intro'><div><p class='kicker'>Приглашение</p><h1>${escapeHtml(state.title)}</h1></div><p class='intro-copy'>Введите имя, чтобы добавлять покупки и брать позиции себе.</p><form class='panel stack' data-action='join-list'><label class='field'><span>Ваше имя</span><input class='input' name='name' required placeholder='Например, Маша' /></label><button class='button' type='submit'>${icon('user')}Присоединиться</button></form></section>`;
 }
@@ -360,7 +393,7 @@ function renderJoin() {
 function renderApp() {
   const [dotClass, label] = syncLabel();
   const adminTools = isAdmin() ? `<button class='top-icon' data-action='copy-share' type='button' aria-label='Добавить участников'>👤</button><button class='top-icon trash-drop' data-drop-trash='true' type='button' aria-label='Удалить'>✖️</button>` : '';
-  return `<header class='app-header'><div class='topline'><div class='title-block'><p class='kicker'>${isAdmin() ? 'Админ' : 'Участник'} · ${escapeHtml(roleForList().name || '')}</p><h1>${escapeHtml(state.title)}</h1></div><div class='top-actions'><button class='top-icon' data-action='copy-list' type='button' aria-label='Копировать список'>📄</button>${adminTools}</div></div><div class='sync-note'><span class='dot ${dotClass}'></span>${label}</div></header>${renderDistribute()}${modal ? renderModal() : ''}${renderUndoToast()}${renderCopyNotice()}`;
+  return `<header class='app-header'><div class='topline'><div class='title-block'><p class='kicker'>${isAdmin() ? 'Админ' : 'Участник'} · ${escapeHtml(roleForList().name || '')}</p><h1>${escapeHtml(state.title)}</h1></div><div class='top-actions'><button class='top-icon' data-action='new-list' type='button' aria-label='Создать новый список'>➕</button><button class='top-icon' data-action='copy-list' type='button' aria-label='Копировать список'>📄</button>${adminTools}</div></div><div class='sync-note'><span class='dot ${dotClass}'></span>${label}</div></header>${renderDistribute()}${modal ? renderModal() : ''}${renderUndoToast()}${renderCopyNotice()}`;
 }
 
 function renderDistribute() {
@@ -397,8 +430,12 @@ function renderInviteCard() {
 }
 
 function renderModal() {
-  const content = modal.type === 'item' ? renderItemModal() : modal.type === 'person' ? renderPersonModal() : modal.type === 'take' ? renderTakeModal() : renderShareModal();
+  const content = modal.type === 'item' ? renderItemModal() : modal.type === 'person' ? renderPersonModal() : modal.type === 'take' ? renderTakeModal() : modal.type === 'list' ? renderListModal() : renderShareModal();
   return `<div class='modal-backdrop' data-action='close-modal'><section class='modal' role='dialog' aria-modal='true' onclick='event.stopPropagation()'>${content}</section></div>`;
+}
+
+function renderListModal() {
+  return `<h2>Новый список</h2><form class='stack' data-action='create-list'><label class='field'><span>Название</span><input class='input' name='title' required value='Новая закупка' /></label><label class='field'><span>Ваше имя</span><input class='input' name='name' required value='${escapeHtml(roleForList().name || '')}' placeholder='Например, Антон' /></label><button class='button' type='submit'>➕ Создать список</button></form>`;
 }
 
 function renderItemModal() {
@@ -652,6 +689,7 @@ async function handleClick(event) {
   const target = event.currentTarget;
   const action = target.dataset.action;
   if (action === 'open-item') modal = { type: 'item' };
+  if (action === 'new-list') modal = { type: 'list' };
   if (action === 'edit-item') modal = { type: 'item', itemId: target.dataset.id };
   if (action === 'open-person') modal = { type: 'person' };
   if (action === 'take-item') modal = { type: 'take', itemId: target.dataset.id };
@@ -670,11 +708,13 @@ async function createList(data) {
   const listId = uid('list');
   const personId = uid('person');
   const deviceUid = firebaseUid || `local_${uid('device')}`;
-  state = normalizeState({ id: listId, title: data.title.trim(), adminUid: deviceUid, createdAt: Date.now(), participants: { [personId]: { id: personId, uid: deviceUid, name: data.name.trim(), icon: randomParticipantIcon(), createdAt: Date.now() } }, items: {} });
+  const createdAt = Date.now();
+  state = normalizeState({ id: listId, title: data.title.trim(), adminUid: deviceUid, createdAt, updatedAt: createdAt, expiresAt: createdAt + listIdleMs, participants: { [personId]: { id: personId, uid: deviceUid, name: data.name.trim(), icon: randomParticipantIcon(), createdAt } }, items: {} });
   setRole({ participantId: personId, name: data.name.trim(), adminLocal: !firebaseUid });
+  modal = null;
   saveLocal();
   if (db && firebaseUid) {
-    await firebaseApi.set(firebaseApi.ref(db, `lists/${listId}`), { ...state, adminUid: firebaseUid, createdAt: firebaseApi.serverTimestamp(), updatedAt: firebaseApi.serverTimestamp() });
+    await firebaseApi.set(firebaseApi.ref(db, `lists/${listId}`), { ...state, adminUid: firebaseUid, createdAt: firebaseApi.serverTimestamp(), updatedAt: firebaseApi.serverTimestamp(), expiresAt: Date.now() + listIdleMs });
     attachRemote(listId);
   }
   history.replaceState(null, '', `?list=${encodeURIComponent(listId)}`);
